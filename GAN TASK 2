@@ -1,0 +1,121 @@
+# Install required libraries (if not installed)
+!pip install tensorflow numpy matplotlib
+
+# Import necessary libraries
+import tensorflow as tf
+from tensorflow.keras.layers import Dense, Flatten, Reshape, Conv2D, Conv2DTranspose, LeakyReLU, Dropout
+from tensorflow.keras.models import Sequential
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+# Load MNIST dataset
+(X_train, _), (_, _) = tf.keras.datasets.mnist.load_data()
+
+# Normalize images to [-1, 1] range
+X_train = (X_train - 127.5) / 127.5
+X_train = np.expand_dims(X_train, axis=-1)
+
+# Display dataset shape
+print("Training data shape:", X_train.shape)
+
+# Build the Generator
+def build_generator():
+    model = Sequential()
+    model.add(Dense(7 * 7 * 256, use_bias=False, input_shape=(100,)))
+    model.add(LeakyReLU())
+    model.add(Reshape((7, 7, 256)))
+
+    model.add(Conv2DTranspose(128, kernel_size=5, strides=1, padding='same', use_bias=False))
+    model.add(LeakyReLU())
+
+    model.add(Conv2DTranspose(64, kernel_size=5, strides=2, padding='same', use_bias=False))
+    model.add(LeakyReLU())
+
+    model.add(Conv2DTranspose(1, kernel_size=5, strides=2, padding='same', use_bias=False, activation='tanh'))
+    return model
+
+generator = build_generator()
+generator.summary()
+
+# Build the Discriminator
+def build_discriminator():
+    model = Sequential()
+    model.add(Conv2D(64, kernel_size=5, strides=2, padding='same', input_shape=[28, 28, 1]))
+    model.add(LeakyReLU())
+    model.add(Dropout(0.3))
+
+    model.add(Conv2D(128, kernel_size=5, strides=2, padding='same'))
+    model.add(LeakyReLU())
+    model.add(Dropout(0.3))
+
+    model.add(Flatten())
+    model.add(Dense(1, activation='sigmoid'))
+    return model
+
+discriminator = build_discriminator()
+discriminator.summary()
+
+# Compile the Discriminator
+discriminator.compile(optimizer=tf.keras.optimizers.Adam(1e-4), loss='binary_crossentropy', metrics=['accuracy'])
+
+# Build and Compile the GAN
+def build_gan(generator, discriminator):
+    discriminator.trainable = False
+    model = Sequential([generator, discriminator])
+    return model
+
+gan = build_gan(generator, discriminator)
+gan.compile(optimizer=tf.keras.optimizers.Adam(1e-4), loss='binary_crossentropy')
+
+# Training Function
+EPOCHS = 50
+BATCH_SIZE = 256
+NOISE_DIM = 100
+NUM_EXAMPLES = 16
+
+seed = tf.random.normal([NUM_EXAMPLES, NOISE_DIM])
+
+def generate_and_save_images(model, epoch, test_input):
+    predictions = model(test_input, training=False)
+    fig = plt.figure(figsize=(4, 4))
+
+    for i in range(predictions.shape[0]):
+        plt.subplot(4, 4, i + 1)
+        plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
+        plt.axis('off')
+
+    os.makedirs('images', exist_ok=True)
+    plt.savefig(f'images/image_at_epoch_{epoch:04d}.png')
+    plt.show()
+
+def train(dataset, epochs):
+    for epoch in range(epochs):
+        for image_batch in dataset:
+            # Train discriminator
+            noise = tf.random.normal([BATCH_SIZE, NOISE_DIM])
+            generated_images = generator(noise, training=True)
+
+            real_labels = tf.ones((BATCH_SIZE, 1))
+            fake_labels = tf.zeros((BATCH_SIZE, 1))
+
+            d_loss_real = discriminator.train_on_batch(image_batch, real_labels)
+            d_loss_fake = discriminator.train_on_batch(generated_images, fake_labels)
+
+            # Train generator
+            noise = tf.random.normal([BATCH_SIZE, NOISE_DIM])
+            misleading_labels = tf.ones((BATCH_SIZE, 1))
+            g_loss = gan.train_on_batch(noise, misleading_labels)
+
+        print(f'Epoch {epoch + 1}, D Loss: {d_loss_real[0]:.4f}, G Loss: {g_loss:.4f}')
+        generate_and_save_images(generator, epoch + 1, seed)
+
+# Prepare dataset
+BUFFER_SIZE = 60000
+train_dataset = tf.data.Dataset.from_tensor_slices(X_train).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+
+# Start training
+train(train_dataset, EPOCHS)
+
+# Generate final images
+generate_and_save_images(generator, EPOCHS, seed)
